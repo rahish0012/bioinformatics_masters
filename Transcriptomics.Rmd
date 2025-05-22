@@ -1,0 +1,462 @@
+---
+title: "R Notebook"
+output:
+  pdf_document: default
+  html_notebook: default
+  html_document:
+    df_print: paged
+---
+
+Rahi Shah (rs8579@nyu.edu)
+
+Loading the hippocampus (HC) data as data.hc and frontal cortex (FC) data as data.fc
+
+Combining both data together as 'data'. I got rid of all the genes where there was zero expression across all the samples to make the data more cleaner. This is called 'data_filtered'.
+
+Creating an 'expgroups' dataframe which has information about both my factors as columns. I'm lso specifying Diet as a factor to manually relevel it and set pre-KD as the reference for later analyses. 
+
+
+```{r}
+data.hc <- read.csv("~/Downloads/GSE225682_hx_gene_count_mouse_allsamples.csv.gz", row.names=1, header = T)
+
+data.fc <- read.csv("~/Downloads/GSE225682_fx_gene_count_mouse_allsamples.csv.gz", row.names=1, header = T)
+
+data <- cbind(data.hc, data.fc)
+
+sample_names <- colnames(data)
+expgroups <- data.frame(row.names = sample_names, Tissue = character(40), Diet = character(40))
+
+tissue_groups <- rep(c("hippocampus", "frontal_cortex"), each = 20)
+diet_groups <- rep(c("pre_KD", "post_KD", "pre_KD", "post_KD"), each = 10)
+expgroups$Tissue <- tissue_groups
+expgroups$Diet <- diet_groups
+
+expgroups$Tissue <- as.factor(expgroups$Tissue) #Factored after all the analyses to check what my reference level was. Post_KD diet is the baseline. 
+expgroups$Diet <- as.factor(expgroups$Diet)
+expgroups$Diet <- relevel(expgroups$Diet, ref = "pre_KD")
+
+data_filtered <- data[rowSums(data != 0) > 0, ]
+```
+
+
+
+
+Loading DESeq2 and running it on both my factors as well as the interaction term. Checking the levels to ensure that the statistics I see are for post-KD mice. 
+```{r}
+#library(DESeq2)
+levels(expgroups$Diet)
+cds <- DESeqDataSetFromMatrix(countData = data_filtered, 
+                             colData=expgroups,
+                             design= ~Diet + Tissue + Tissue*Diet)
+```
+
+Estimating dispersions and normalizing for library size:
+```{r}
+cds = estimateSizeFactors(cds)
+cds = estimateDispersions(cds)
+plotDispEsts(cds)
+
+```
+
+Running DESeq on the cds object:
+```{r}
+cds = DESeq(cds)
+res <- results(cds)
+head(res)
+```
+
+```{r}
+resultsNames(cds)
+```
+
+Unfortunately, none of the genes in my analysis for any of the comparisions displayed padj value of <0.05.
+```{r}
+tissue_results <- results(cds, name = "Tissue_hippocampus_vs_frontal_cortex")
+sum(tissue_results$padj < 0.05)
+
+diet_results <- results(cds, name = "Diet_post_KD_vs_pre_KD")
+sum(diet_results$padj < 0.05)
+
+interaction_result <- results(cds, name = "Dietpost_KD.Tissuehippocampus")
+sum(interaction_result$padj < 0.05)
+```
+
+I tried looking for adjusted p-values, but it unfortunately gave me no results. Hence, I changed the parameters and looked for p-values < 0.01 and increased the log2FC cutoff to 2 and -2 in order to compensate for the lack of padj for any of the genes. This is similar to what the publication has done as well. 
+```{r}
+greater_than = res[which(res$padj < 0.05 & res$log2FoldChange > 1), ] 
+less_than = res[which(res$padj < 0.05 & res$log2FoldChange < -1), ] 
+diffexpgenes = rbind(greater_than, less_than) #saving all the genes that met the above 2 criteria in a new object called 'diffexpgenes'.
+diffexpgenes = as.data.frame(diffexpgenes)
+dim(diffexpgenes) 
+```
+
+Normalizing the counts using median of ratios available from the DESeq package. 
+```{r}
+normvalues = counts(cds, normalized=TRUE) 
+normvalues = as.data.frame(normvalues) 
+```
+
+
+Finding the differentially expressed genes using new parameters: 
+```{r}
+greater_than = res[which(res$pvalue < 0.01 & res$log2FoldChange > 2), ] 
+less_than = res[which(res$pvalue < 0.01 & res$log2FoldChange < -2), ] 
+diffexpgenes = rbind(greater_than, less_than) #saving all the genes that met the above 2 criteria in a new object called 'diffexpgenes'.
+diffexpgenes = as.data.frame(diffexpgenes)
+dim(diffexpgenes)  
+head(diffexpgenes)
+```
+
+Creating a diffexpvalues df using the normalized values:  
+```{r}
+genes_of_interest = row.names(diffexpgenes) 
+diffexpvalues = normvalues[genes_of_interest, ] 
+head(diffexpvalues)
+```
+
+Performing clustering analysis using average distance and pearson correlation method: 
+```{r}
+diffexpvalues.cor = cor(t(diffexpvalues)) 
+diffexpvalues.dist = as.dist(1-diffexpvalues.cor) 
+diffexp.clust = hclust(diffexpvalues.dist, method="average")
+
+plot(diffexp.clust)
+```
+
+Looking at the results for the differences in the overall data: 
+```{r}
+diffexp.clust.groups = cutree(diffexp.clust, k=4) 
+diffexp.clust.groups <- as.data.frame(diffexp.clust.groups)
+table(diffexp.clust.groups)
+```
+
+Using the diffexpvalues df to visualize the changes in expression patterns in the tissues as a result of the diet (specifically looking at the interaction factor - this is the default).  
+```{r}
+library(pheatmap)
+pheatmap(
+  diffexpvalues, 
+  annotation_col = expgroups,
+  scale = "row",
+  cluster_cols = FALSE,
+  show_rownames = TRUE,
+  cutree_rows = 4,
+  cluster_rows = TRUE
+)
+```
+Majority of the changes are primarily visible in the hippocamus region as a function of Diet. 
+
+Making another CDS for just the hippocampus genes to look at the effects of Diet more closely: 
+```{r}
+levels(expgroups$Diet)
+data_filtered_HC <- data.hc[rowSums(data.hc != 0) > 0, ]
+cds_HC <- DESeqDataSetFromMatrix(countData = data_filtered_HC,
+                                 colData = expgroups[c(1:20), ],
+                                 design = ~Diet)
+```
+
+Estimating dispersions and performing library correction again for HC data: 
+```{r}
+cds_HC <- estimateSizeFactors(cds_HC)
+cds_HC <- estimateDispersions(cds_HC)
+plotDispEsts(cds_HC)
+```
+Running DESeq on HC data:
+```{r}
+cds_HC <- DESeq(cds_HC)
+res_HC <- results(cds_HC)
+
+head(res_HC)
+```
+
+Using the new parameters to identify the differentially expressed genes and saving them in 'diffexpgenes_HC'
+```{r}
+greater_than_HC = res_HC[which(res_HC$pvalue < 0.01 & res_HC$log2FoldChange > 2), ] 
+less_than_HC = res_HC[which(res_HC$pvalue < 0.01 & res_HC$log2FoldChange < -2), ] 
+diffexpgenes_HC = rbind(greater_than_HC, less_than_HC) #saving all the genes that met the above 2 criteria in a new object called 'diffexpgenes'.
+diffexpgenes_HC = as.data.frame(diffexpgenes_HC)
+dim(diffexpgenes_HC)  
+head(diffexpgenes_HC)
+```
+
+using median of ratios again to normalize HC data:
+```{r}
+normvalues_HC = counts(cds_HC, normalized=TRUE) 
+normvalues_HC = as.data.frame(normvalues_HC)
+```
+
+
+Using the normalized values and grabbing the values for the diffexpgenes in the HC and saving them in 'diffexpvalues_HC':
+```{r}
+genes_of_interest_HC = row.names(diffexpgenes_HC) 
+diffexpvalues_HC = normvalues_HC[genes_of_interest_HC, ] 
+head(diffexpvalues_HC)
+```
+
+Performing a pearson correlation distance and clustering using the average method:
+```{r}
+diffexpvalues.cor_HC = cor(t(diffexpvalues_HC)) 
+diffexpvalues.dist_HC = as.dist(1-diffexpvalues.cor_HC) 
+diffexp.clust_HC = hclust(diffexpvalues.dist_HC, method="average")
+
+plot(diffexp.clust_HC)
+```
+Looking to see how well this data groups: 
+```{r}
+diffexp.clust.groups_HC = cutree(diffexp.clust_HC, k=2) 
+diffexp.clust.groups_HC <- as.data.frame(diffexp.clust.groups_HC)
+table(diffexp.clust.groups_HC)
+```
+
+Creating a heatmap using k=2 to look at the differences specifically between the diets:
+```{r}
+library(pheatmap)
+pheatmap(
+  diffexpvalues_HC, 
+  annotation_col = expgroups[c(1:20), ],
+  scale = "row",
+  cluster_cols = FALSE,
+  show_rownames = TRUE,
+  cutree_rows = 2,
+  cluster_rows = TRUE
+)
+```
+Filtering the data again to look at the DEGs in FC. I'm getting rid of all genes with zero expression:
+```{r}
+data_filtered_FC <- data.fc[rowSums(data.fc != 0) > 0, ]
+cds_FC <- DESeqDataSetFromMatrix(countData = data_filtered_FC,
+                                 colData = expgroups[c(21:40), ],
+                                 design = ~Diet)
+
+```
+
+estimating dispersions and correcting for size library:
+```{r}
+cds_FC <- estimateSizeFactors(cds_FC)
+cds_FC <- estimateDispersions(cds_FC)
+plotDispEsts(cds_FC)
+```
+checking the levels again to be sure and running DESeq on cds_FC. 
+```{r}
+levels(expgroups$Diet)
+cds_FC <- DESeq(cds_FC)
+res_FC <- results(cds_FC)
+
+head(res_FC)
+```
+
+Using the new parameters to find DEGs in FC as a function of diet:
+```{r}
+greater_than_FC = res_FC[which(res_FC$pvalue < 0.01 & res_FC$log2FoldChange > 2), ] 
+less_than_FC = res_FC[which(res_FC$pvalue < 0.01 & res_FC$log2FoldChange < -2), ] 
+diffexpgenes_FC = rbind(greater_than_FC, less_than_FC) #saving all the genes that met the above 2 criteria in a new object called 'diffexpgenes'.
+diffexpgenes_FC = as.data.frame(diffexpgenes_FC)
+dim(diffexpgenes_FC)
+head(diffexpgenes_FC)
+```
+
+normalizing the counts:
+```{r}
+normvalues_FC = counts(cds_FC, normalized=TRUE) 
+normvalues_FC = as.data.frame(normvalues_FC)
+```
+
+creating a new data frame called 'diffexpvalues_FC' using the normalized counts:
+```{r}
+genes_of_interest_FC = row.names(diffexpgenes_FC) 
+diffexpvalues_FC = normvalues_FC[genes_of_interest_FC, ] 
+head(diffexpvalues_FC)
+```
+
+distance calculation using pearson correlation:
+```{r}
+diffexpvalues.cor_FC = cor(t(diffexpvalues_FC)) 
+diffexpvalues.dist_FC = as.dist(1-diffexpvalues.cor_FC) 
+diffexp.clust_FC = hclust(diffexpvalues.dist_FC, method="average")
+
+plot(diffexp.clust_FC)
+```
+Looking for differences as a result of diet:
+```{r}
+diffexp.clust.groups_FC = cutree(diffexp.clust_FC, k=2) 
+diffexp.clust.groups_FC <- as.data.frame(diffexp.clust.groups_FC)
+table(diffexp.clust.groups_FC)
+```
+
+visualizing those differences using a heatmap:
+```{r}
+#library(pheatmap)
+pheatmap(
+  diffexpvalues_FC, 
+  annotation_col = expgroups[c(21:40), ],
+  scale = "row",
+  cluster_cols = FALSE,
+  show_rownames = TRUE,
+  cutree_rows = 2,
+  cluster_rows = TRUE
+)
+```
+
+
+**Gene set enrichment analysis**
+
+Firstly, I'll be creating a gse object from the interaction factors (res object). Loading the required libraries for clusterProfiler and visualizing:
+```{r}
+library(clusterProfiler)
+library(enrichplot)
+```
+
+I'm first creating an original gene list, which consists of all the genes that are considered as part of the analyses, and then creating another gene list which omits the NA values (if any are present). Then, the log2FC changes are arranged in a decreasing order, which is necessary as part of the gseGO function. 
+```{r}
+original_gene_list <- res$log2FoldChange
+names(original_gene_list) <- row.names(res)
+gene_list <- na.omit(original_gene_list)
+gene_list = sort(gene_list, decreasing = TRUE) #this is required for cluster profiler
+View(gene_list)
+```
+
+
+The gseGO function from the clusterProfiler package is used to perform Gene Set Enrichment analysis of Gene Ontology terms. It takes into account all the log2FC changes in every gene. I specified the keytype (which in my case in ELSEMBL IDs), the ontology, where I specified 'all'. I sepcified the minimum and maximum gene set sizes so I can excluse gene sets which are either too big or too small (which can be likely false positives as well). The p-value cutoff I chose is 0.01 because I'm using unadjusted p-values. the organism is the mouse database. 
+```{r}
+organism = "org.Mm.eg.db"
+gse <- gseGO(geneList=gene_list, 
+             ont ="ALL", 
+             keyType = "ENSEMBL", 
+             nPerm = 10000, 
+             minGSSize = 15, 
+             maxGSSize = 500, 
+             pvalueCutoff = 0.01, 
+             verbose = TRUE, 
+             OrgDb = organism, 
+             pAdjustMethod = "none") #I tried fdr again and it gave me no results
+
+head(gse)
+dim(gse)
+```
+Creating a sotplot, which I want to see the GO terms that are activated or supressed separately, hence I'm using split=".sign". Again, my reference for DESeq where I got the log2FC changes used in this analysis is the pre-KD, which these changes are a result of the post-KD diet. 
+```{r}
+require(DOSE)
+dotplot(gse, showCategory=10, split=".sign") + facet_grid(.~.sign)
+```
+Creating a ridgeplot using the 'ridgeplot' function as it can make visualizing better. The enrichment distribution in either direction can tell us about the enrichment terms that are up-regulated vs down-regulated. 
+```{r}
+library(ggridges)
+ridgeplot(gse) + labs(x = "enrichment distribution") + theme(axis.text.y = element_text(size = 10))
+```
+
+
+
+**GSEA analysis in hippocampus genes as a function of diet**
+
+Runnin the same analyses as above but this time using only the hipocampus log2FC results from the res_HC object created by running DESeq on HC
+```{r}
+original_gene_list_HC <- res_HC$log2FoldChange
+names(original_gene_list_HC) <- row.names(res_HC)
+gene_list_HC <- na.omit(original_gene_list_HC)
+gene_list_HC = sort(gene_list_HC, decreasing = TRUE)
+levels(expgroups$Diet)
+```
+
+Everything is the same as the above gseGO. The only thing different is the gene_list_HC, which only consists of genes expressed in the HC. 
+```{r}
+organism = "org.Mm.eg.db"
+gse_HC <- gseGO(geneList=gene_list_HC, 
+             ont ="ALL", 
+             keyType = "ENSEMBL", 
+             nPerm = 10000, 
+             minGSSize = 15, 
+             maxGSSize = 500, 
+             pvalueCutoff = 0.01, 
+             verbose = TRUE, 
+             OrgDb = organism, 
+             pAdjustMethod = "none")
+
+head(gse_HC)
+```
+
+creating a dotplot with gse_HC to visualize enrichment terms 
+```{r}
+require(DOSE)
+#levels(expgroups$Diet)
+dotplot(gse_HC, showCategory=10, split=".sign") + facet_grid(.~.sign)
+```
+Loading ggplot2 required for 'labs' function and creatig ridgeplots for gse_HC
+```{r}
+library(ggplot2)
+ridgeplot(gse_HC) + labs(x = "enrichment distribution") + theme(axis.text.y = element_text(size = 10))
+```
+  
+
+
+**GSEA for Frontal cortex as a function of diet**
+
+```{r}
+original_gene_list_FC <- res_FC$log2FoldChange
+names(original_gene_list_FC) <- row.names(res_FC)
+gene_list_FC <- na.omit(original_gene_list_FC)
+gene_list_FC = sort(gene_list_FC, decreasing = TRUE)
+head(gene_list_FC, 10)
+```
+same analysis with frontal cortex and using the genes expressed only in the frontal cortex. 
+```{r}
+organism = "org.Mm.eg.db"
+gse_FC <- gseGO(geneList=gene_list_FC, 
+             ont ="ALL", 
+             keyType = "ENSEMBL", 
+             nPerm = 10000, 
+             minGSSize = 15, 
+             maxGSSize = 500, 
+             pvalueCutoff = 0.01, 
+             verbose = TRUE, 
+             OrgDb = organism, 
+             pAdjustMethod = "none")
+
+head(gse_FC)
+```
+
+dot plot for enrichment terms in the frontal cortex:
+```{r}
+require(DOSE)
+dotplot(gse_FC, showCategory=10, split=".sign") + facet_grid(.~.sign)
+levels(expgroups$Diet)
+```
+ 
+ridge plot for gse_FC: 
+```{r}
+ridgeplot(gse_FC) + labs(x = "enrichment distribution") + theme(axis.text.y = element_text(size = 10))
+```
+
+**Creating GSEA plots for some of the enrichment terms that are significant, but not represented in the dotplots due to not having a significant log2FC**
+
+
+Using the head function to look at the top 20 significantly different GO terms (ranked by p-value - default).
+```{r}
+head(gse_HC@result, 20)
+```
+
+Using the function 'gseaplot' to look at specific GO terms that weren't represented in dotplot/ridgeplots. 
+```{r}
+gseaplot(gse_HC, by = "all", title = gse_HC$Description[12], geneSetID = 12)
+```
+
+```{r}
+gseaplot(gse_HC, by = "all", title = gse_HC$Description[10], geneSetID = 10)
+```
+
+```{r}
+head(gse_FC@result, 20)
+```
+
+```{r}
+gseaplot(gse_FC, by = "all", title = gse_FC$Description[8], geneSetID = 8)
+```
+
+```{r}
+tinytex::install_tinytex()
+library(tinytex)
+```
+
+
+
+
+
+
