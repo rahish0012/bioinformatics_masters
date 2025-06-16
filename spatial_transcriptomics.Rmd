@@ -1,0 +1,73 @@
+---
+title: "spatial_transcriptomics"
+output: html_document
+date: "2025-06-12"
+---
+
+```{r}
+library(Seurat)
+library(ggplot2) #loading the required libraries
+
+data_dir <- "/scratch/rs8579/spatial_transcriptomics/spatial_transcriptomics" #defining my path where the feature matrix and the spatial data are saved 
+```
+
+```{r}
+# Loading the Visium spatial dataset
+brain <- Load10X_Spatial(
+  data.dir = data_dir,
+  filename = "feature_matrix.h5",
+  slice = "mouse_brain"
+)
+print(brain)
+```
+
+```{r}
+print(head(brain@meta.data)) #viewing the overall summary 
+```
+
+```{r}
+#Normalize and run PCA/UMAP to check clusters:
+brain <- SCTransform(brain, assay = "Spatial", verbose = FALSE) #normalization tool that models technical noise using regularized negative binomial distribution. often a better alternative to NormalizeData(). 
+brain <- RunPCA(brain) #reduces dimensionality by selecting the most variable genes 
+brain <- RunUMAP(brain, dims = 1:30) #projecting the data on a 2D space by using the first 30 PCs 
+
+brain <- FindNeighbors(brain, dims = 1:30) #this will find similar spots on the tissue/ building a k-nearest neighbor graph
+brain <- FindClusters(brain, resolution = 0.4) #this assigns the cluster labels 
+
+SpatialDimPlot(brain, label = TRUE) #visualize the clusters and their localization. 
+```
+
+There are 13 different clusters present. 
+
+Now, we can assign biological meaning to each of these clusters by identifying the marker genes:
+
+```{r}
+markers <- FindAllMarkers(brain, assay = "SCT", only.pos = TRUE)
+head(markers) #this will produce genes that are significantly up-regulated in each of the clusters
+```
+
+Exploring spatially variable genes --> this will take the spatial coordinates to find spatially restricted genes. helpful to identify tissue boundaries, etc. 
+
+```{r}
+#helpful to visualize localized spatial patterns 
+svg <- FindSpatiallyVariableFeatures(
+  brain,
+  assay = "SCT",
+  features = VariableFeatures(brain),
+  selection.method = "markvariogram" #calculates a spatial autocorrelation statistic 
+)
+```
+
+```{r}
+#visualizing the top spatially variable genes: 
+head(svg)
+#SpatialFeaturePlot(brain, features = head(svg$gene, 3))
+```
+
+```{r}
+SpatialFeaturePlot(brain, features = head(rownames(svg), 3))
+
+```
+
+
+**SpatialDimPlot() is helpful for visualizing clusters by mapping them onto the tissue. It shows how groups of spots differ in their overall gene expression profiles and where those clusters are physically located. On the other hand, FindSpatiallyVariableFeatures() identifies individual genes whose expression patterns are spatially restricted or patterned — these genes may or may not be what define the clusters, but they are important for understanding spatial organization of the tissue.**
