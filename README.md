@@ -1,4 +1,4 @@
-Proteomics: implementing machine learning models using protein and phosphosite data 
+Proteomics: implementing machine learning models using protein expression, phosphosite, and clinical metadata to classify breast cancer tumor subtypes
 
 Transcriptomics: Bulk RNA-seq data from mice. Differential gene expression analysis is conducted using DESeq2; pathway and further downstream analysis conducted using ClusterProfiler.
 
