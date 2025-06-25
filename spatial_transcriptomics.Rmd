@@ -34,6 +34,9 @@ brain <- RunUMAP(brain, dims = 1:30) #projecting the data on a 2D space by using
 brain <- FindNeighbors(brain, dims = 1:30) #this will find similar spots on the tissue/ building a k-nearest neighbor graph
 brain <- FindClusters(brain, resolution = 0.4) #this assigns the cluster labels 
 
+brain <- FindVariableFeatures(brain, selection.method = "vst", nfeatures = 2000) #return 2000 most variable features, tp be used downstream in finding spatially variable features 
+
+
 SpatialDimPlot(brain, label = TRUE) #visualize the clusters and their localization. 
 ```
 
